@@ -168,17 +168,24 @@ func showSolveConfirm(w fyne.Window, bw *BoardWidget) {
 				return
 			}
 
-			// Snapshot the current board and solve a copy in memory.
+			// Use the solution already cached in the widget (set when the
+			// puzzle was generated). Only fall back to SolveMatrix when the
+			// cache is absent, e.g. an old session loaded before this feature.
 			snapshot := bw.board.GetBoard()
-			solved := snapshot // will be overwritten by solver
-			count := 0
-			sudoku.SolveMatrix(&solved, &count)
-
-			if count == 0 {
-				fyne.Do(func() {
-					dialog.ShowInformation("No Solution", "This puzzle has no valid solution.", w)
-				})
-				return
+			var solved [sudoku.BoardSize][sudoku.BoardSize]int
+			var zero [sudoku.BoardSize][sudoku.BoardSize]int
+			if bw.solution != zero {
+				solved = bw.solution
+			} else {
+				solved = snapshot
+				count := 0
+				sudoku.SolveMatrix(&solved, &count)
+				if count == 0 {
+					fyne.Do(func() {
+						dialog.ShowInformation("No Solution", "This puzzle has no valid solution.", w)
+					})
+					return
+				}
 			}
 
 			// Collect only the cells that were empty (need to be filled).
