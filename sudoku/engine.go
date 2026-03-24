@@ -26,9 +26,20 @@ type cell struct {
 	locked bool // true when the value was set as part of puzzle initialisation
 }
 
+// move records a single player action for undo purposes.
+type move struct {
+	row, col int
+	oldVal   int // value before the action (0 = was empty)
+	newVal   int // value after the action (0 = cell was cleared)
+}
+
 // Board represents the full 9×9 Sudoku grid and exposes the game engine API.
 type Board struct {
-	cells [BoardSize][BoardSize]cell
+	cells     [BoardSize][BoardSize]cell
+	undoStack []move
+	// solution is the fully-solved grid, cached by SetBoard/SetSolution so
+	// GetHint can return a guaranteed-correct answer.
+	solution [BoardSize][BoardSize]int
 }
 
 // NewBoard returns a new, empty Board ready for play.
@@ -146,7 +157,96 @@ func (b *Board) GetBoard() [BoardSize][BoardSize]int {
 //
 // Possible errors: ErrBoardSize, ErrInvalidValue, ErrConflict.
 func (b *Board) SetBoard(matrix [BoardSize][BoardSize]int) error {
-	return b.loadMatrix(matrix, true)
+	if err := b.loadMatrix(matrix, true); err != nil {
+		return err
+	}
+	// Cache the solution so GetHint can answer correctly.
+	sol := matrix
+	count := 0
+	SolveMatrix(&sol, &count)
+	if count > 0 {
+		b.solution = sol
+	}
+	b.undoStack = nil
+	return nil
+}
+
+// SetSolution stores the fully-solved grid for this puzzle so GetHint works
+// even when the puzzle was loaded without re-solving.
+func (b *Board) SetSolution(sol [BoardSize][BoardSize]int) {
+	b.solution = sol
+}
+
+// PlaceNumberForceUndo is like PlaceNumberForce but records the action on
+// the undo stack. Returns the same errors as PlaceNumberForce.
+func (b *Board) PlaceNumberForceUndo(row, col, val int) error {
+	old := b.cells[row][col].value
+	if err := b.PlaceNumberForce(row, col, val); err != nil {
+		return err
+	}
+	b.undoStack = append(b.undoStack, move{row: row, col: col, oldVal: old, newVal: val})
+	return nil
+}
+
+// ClearCellUndo is like ClearCell but records the action on the undo stack.
+func (b *Board) ClearCellUndo(row, col int) error {
+	old := b.cells[row][col].value
+	if err := b.ClearCell(row, col); err != nil {
+		return err
+	}
+	b.undoStack = append(b.undoStack, move{row: row, col: col, oldVal: old, newVal: 0})
+	return nil
+}
+
+// Undo reverses the most recent PlaceNumberForceUndo or ClearCellUndo.
+// Returns (row, col, true) of the affected cell so the UI can re-select it,
+// or (-1, -1, false) if the stack is empty.
+func (b *Board) Undo() (int, int, bool) {
+	if len(b.undoStack) == 0 {
+		return -1, -1, false
+	}
+	m := b.undoStack[len(b.undoStack)-1]
+	b.undoStack = b.undoStack[:len(b.undoStack)-1]
+	b.cells[m.row][m.col].value = m.oldVal
+	return m.row, m.col, true
+}
+
+// ClearUndo empties the undo stack. Call this when a new puzzle is loaded.
+func (b *Board) ClearUndo() {
+	b.undoStack = nil
+}
+
+// CanUndo reports whether there is anything to undo.
+func (b *Board) CanUndo() bool {
+	return len(b.undoStack) > 0
+}
+
+// GetHint returns (row, col, value, true) for one randomly chosen empty
+// (or incorrectly filled) non-locked cell, using the cached solution.
+// Returns (0, 0, 0, false) if no hint is available (puzzle solved, or no
+// solution was cached).
+func (b *Board) GetHint(rng interface{ Intn(int) int }) (int, int, int, bool) {
+	if b.solution == ([BoardSize][BoardSize]int{}) {
+		return 0, 0, 0, false
+	}
+	type candidate struct{ r, c, v int }
+	var candidates []candidate
+	for r := 0; r < BoardSize; r++ {
+		for c := 0; c < BoardSize; c++ {
+			if b.cells[r][c].locked {
+				continue
+			}
+			want := b.solution[r][c]
+			if b.cells[r][c].value != want {
+				candidates = append(candidates, candidate{r, c, want})
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return 0, 0, 0, false
+	}
+	pick := candidates[rng.Intn(len(candidates))]
+	return pick.r, pick.c, pick.v, true
 }
 
 // LockedCells returns a 9×9 boolean matrix where true means the cell is a

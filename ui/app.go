@@ -136,11 +136,25 @@ func (gt *gameTimer) stop() {
 	}
 }
 
+// variantTheme wraps DefaultTheme and forces a specific light/dark variant,
+// avoiding the deprecated theme.LightTheme() / theme.DarkTheme() functions.
+type variantTheme struct {
+	fyne.Theme
+	variant fyne.ThemeVariant
+}
+
+func (t variantTheme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
+	return t.Theme.Color(name, t.variant)
+}
+
+func forcedTheme(variant fyne.ThemeVariant) fyne.Theme {
+	return variantTheme{Theme: theme.DefaultTheme(), variant: variant}
+}
+
 // Run creates the Fyne application, builds the main window, and blocks until
 // the window is closed.
 func Run() {
 	a := app.New()
-	a.Settings().SetTheme(theme.LightTheme())
 
 	w := a.NewWindow("Sudoku")
 
@@ -150,10 +164,14 @@ func Run() {
 	bw := NewBoardWidget(board)
 	bw.conflict = board.Conflicts()
 
+	// currentDifficulty tracks the active puzzle for stats recording.
+	// Starter puzzle counts as Easy.
+	currentDifficulty := sudoku.Easy
+
 	// ---- Toolbar -----------------------------------------------------------
 
 	newBtn := widget.NewButton("New Game", func() {
-		showNewGameDialog(w, bw)
+		showNewGameDialog(w, bw, &currentDifficulty)
 	})
 	newBtn.Importance = widget.HighImportance
 
@@ -162,11 +180,44 @@ func Run() {
 	})
 	solveBtn.Importance = widget.HighImportance
 
-	// Dark-mode toggle — starts in light mode.
+	// Undo button — disabled until there is something to undo.
+	undoBtn := widget.NewButtonWithIcon("", theme.ContentUndoIcon(), func() {
+		bw.UndoLast()
+	})
+	undoBtn.Disable()
+
+	// Hint button.
+	hintsLeft := 3
+	hintBtn := widget.NewButton(fmt.Sprintf("Hint (%d)", hintsLeft), func() {})
+	hintBtn.OnTapped = func() {
+		if hintsLeft <= 0 {
+			return
+		}
+		if bw.ApplyHint() {
+			hintsLeft--
+			if hintsLeft > 0 {
+				hintBtn.SetText(fmt.Sprintf("Hint (%d)", hintsLeft))
+			} else {
+				hintBtn.SetText("No Hints")
+				hintBtn.Disable()
+			}
+		}
+	}
+
+	// Stats button.
+	statsBtn := widget.NewButtonWithIcon("", theme.InfoIcon(), func() {
+		ShowStatsDialog(w, a.Preferences())
+	})
+
+	// Dark-mode toggle — initialised from the OS/user preference.
 	// onThemeChange is assigned below once the stats labels exist.
-	darkMode := false
+	darkMode := a.Settings().ThemeVariant() == theme.VariantDark
+	themeBtnLabel := "🌙"
+	if darkMode {
+		themeBtnLabel = "☀️"
+	}
 	var onThemeChange func()
-	themeBtn := widget.NewButton("🌙", func() {
+	themeBtn := widget.NewButton(themeBtnLabel, func() {
 		if onThemeChange != nil {
 			onThemeChange()
 		}
@@ -175,6 +226,9 @@ func Run() {
 	toolbar := container.NewHBox(
 		widget.NewLabel("Sudoku"),
 		layout.NewSpacer(),
+		statsBtn,
+		undoBtn,
+		hintBtn,
 		themeBtn,
 		solveBtn,
 		newBtn,
@@ -210,10 +264,10 @@ func Run() {
 	onThemeChange = func() {
 		darkMode = !darkMode
 		if darkMode {
-			a.Settings().SetTheme(theme.DarkTheme())
+			a.Settings().SetTheme(forcedTheme(theme.VariantDark))
 			themeBtn.SetText("☀️")
 		} else {
-			a.Settings().SetTheme(theme.LightTheme())
+			a.Settings().SetTheme(forcedTheme(theme.VariantLight))
 			themeBtn.SetText("🌙")
 		}
 		SetDarkMode(darkMode)
@@ -228,17 +282,41 @@ func Run() {
 	gt := &gameTimer{label: timerLabel}
 	gt.start()
 
+	// Sync colours/widget state to the detected startup theme.
+	SetDarkMode(darkMode)
+	setStatColours(darkMode)
+
 	// Pause/resume the timer when the app backgrounds/foregrounds.
 	a.Lifecycle().SetOnExitedForeground(func() { gt.pause() })
 	a.Lifecycle().SetOnEnteredForeground(func() { gt.resume() })
 
-	// Reset timer and mistakes when a new game starts.
-	bw.OnNewGame = func() {
-		gt.reset()
+	// Wire undo button enable/disable to board undo stack state.
+	bw.OnUndoStateChanged = func(canUndo bool) {
+		if canUndo {
+			undoBtn.Enable()
+		} else {
+			undoBtn.Disable()
+		}
 	}
 
-	// Stop timer when puzzle is solved.
+	// Reset timer, mistakes, hints, and undo stack when a new game starts.
+	bw.OnNewGame = func() {
+		gt.reset()
+		hintsLeft = 3
+		hintBtn.SetText(fmt.Sprintf("Hint (%d)", hintsLeft))
+		hintBtn.Enable()
+		undoBtn.Disable()
+	}
+
+	// Stop timer and record win when puzzle is solved by the player.
 	bw.OnSolved = func() {
+		gt.stop()
+		elapsed := int(gt.elapsed.Seconds())
+		RecordWin(a.Preferences(), currentDifficulty, elapsed)
+	}
+
+	// Auto-solve: stop the timer but do not record in stats.
+	bw.OnAutoSolved = func() {
 		gt.stop()
 	}
 
@@ -354,7 +432,7 @@ func buildNumpad(bw *BoardWidget) (fyne.CanvasObject, func()) {
 
 // showNewGameDialog presents Easy / Medium / Hard choices and generates a
 // fresh random puzzle for the selected difficulty.
-func showNewGameDialog(w fyne.Window, bw *BoardWidget) {
+func showNewGameDialog(w fyne.Window, bw *BoardWidget, difficulty *sudoku.Difficulty) {
 	type option struct {
 		label string
 		diff  sudoku.Difficulty
@@ -374,6 +452,7 @@ func showNewGameDialog(w fyne.Window, bw *BoardWidget) {
 		o := o // capture
 		btn := widget.NewButton(o.label, func() {
 			dlg.Hide()
+			*difficulty = o.diff
 			puzzle := sudoku.GenerateBoard(o.diff)
 			bw.UpdateBoard(puzzle) //nolint:errcheck
 		})
@@ -460,9 +539,10 @@ func showSolveConfirm(w fyne.Window, bw *BoardWidget) {
 						bw.OnSelectionChanged()
 					}
 					bw.WaveAllCells()
-					// Puzzle is now complete — stop the timer.
-					if bw.OnSolved != nil {
-						bw.OnSolved()
+					// Puzzle is now complete via auto-solve — stop the timer only,
+					// do NOT record in stats.
+					if bw.OnAutoSolved != nil {
+						bw.OnAutoSolved()
 					}
 				})
 			}()

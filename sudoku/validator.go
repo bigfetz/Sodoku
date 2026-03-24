@@ -3,6 +3,11 @@ package sudoku
 // isValidPlacement reports whether placing val at (row, col) on the given
 // cells grid is legal according to Sudoku rules (no duplicate in the row,
 // column, or 3×3 box).
+//
+// Note: generator.go has a parallel function isValidInMatrix that performs
+// the same checks but operates on a raw *[BoardSize][BoardSize]int instead of
+// a cell array. The duplication is intentional — converting types inside the
+// backtracking hot-loop would introduce unnecessary overhead.
 func isValidPlacement(cells [BoardSize][BoardSize]cell, row, col, val int) bool {
 	return !conflictsInRow(cells, row, col, val) &&
 		!conflictsInCol(cells, row, col, val) &&

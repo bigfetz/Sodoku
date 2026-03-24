@@ -8,6 +8,7 @@ package ui
 import (
 	"image/color"
 	"math"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -144,8 +145,17 @@ type BoardWidget struct {
 	// Use it to reset external state like the timer.
 	OnNewGame func()
 
-	// OnSolved is called once when the puzzle is completed without conflicts.
+	// OnSolved is called once when the puzzle is completed without conflicts
+	// by the player (not via auto-solve).
 	OnSolved func()
+
+	// OnAutoSolved is called when the auto-solver finishes the puzzle.
+	// Stats are NOT recorded for auto-solve completions.
+	OnAutoSolved func()
+
+	// OnUndoStateChanged is called whenever the undo-stack availability changes
+	// so the UI can enable/disable the undo button.
+	OnUndoStateChanged func(canUndo bool)
 
 	// errorCount tracks how many wrong numbers the player has entered this game.
 	errorCount int
@@ -181,6 +191,7 @@ func (bw *BoardWidget) UpdateBoard(matrix [sudoku.BoardSize][sudoku.BoardSize]in
 	if bw.OnErrorCountChanged != nil {
 		bw.OnErrorCountChanged(0)
 	}
+	bw.notifyUndoState()
 	if bw.OnNewGame != nil {
 		bw.OnNewGame()
 	}
@@ -200,7 +211,13 @@ func (bw *BoardWidget) PlaceDigit(digit int) {
 	prevConflict := bw.board.Conflicts()
 	// Use ForcePlace so a conflicting number is written to the board and shown
 	// in red, rather than being silently rejected.
-	err := bw.board.PlaceNumberForce(bw.selRow, bw.selCol, digit)
+	var err error
+	if bw.solving {
+		// During auto-solve don't push undo entries.
+		err = bw.board.PlaceNumberForce(bw.selRow, bw.selCol, digit)
+	} else {
+		err = bw.board.PlaceNumberForceUndo(bw.selRow, bw.selCol, digit)
+	}
 	bw.conflict = bw.board.Conflicts()
 
 	if err == nil {
@@ -223,6 +240,9 @@ func (bw *BoardWidget) PlaceDigit(digit int) {
 		}
 	}
 
+	if !bw.solving {
+		bw.notifyUndoState()
+	}
 	bw.Refresh()
 	bw.notifyDigitCounts()
 }
@@ -232,10 +252,58 @@ func (bw *BoardWidget) ClearSelected() {
 	if bw.selRow < 0 {
 		return
 	}
-	bw.board.ClearCell(bw.selRow, bw.selCol) //nolint:errcheck
+	bw.board.ClearCellUndo(bw.selRow, bw.selCol) //nolint:errcheck
 	bw.conflict = bw.board.Conflicts()
+	bw.notifyUndoState()
 	bw.Refresh()
 	bw.notifyDigitCounts()
+}
+
+// UndoLast reverses the most recent player action.
+func (bw *BoardWidget) UndoLast() {
+	row, col, ok := bw.board.Undo()
+	if !ok {
+		return
+	}
+	bw.selRow, bw.selCol = row, col
+	bw.conflict = bw.board.Conflicts()
+	bw.notifyUndoState()
+	bw.Refresh()
+	bw.notifyDigitCounts()
+	if bw.OnSelectionChanged != nil {
+		bw.OnSelectionChanged()
+	}
+}
+
+// ApplyHint reveals one correct cell chosen at random.
+// Returns true if a hint was applied.
+func (bw *BoardWidget) ApplyHint() bool {
+	r, c, v, ok := bw.board.GetHint(rand.New(rand.NewSource(rand.Int63())))
+	if !ok {
+		return false
+	}
+	prevConflict := bw.board.Conflicts()
+	_ = bw.board.PlaceNumberForceUndo(r, c, v)
+	bw.selRow, bw.selCol = r, c
+	bw.conflict = bw.board.Conflicts()
+	bw.checkCompletions(prevConflict)
+	bw.notifyUndoState()
+	bw.Refresh()
+	bw.notifyDigitCounts()
+	if bw.OnSelectionChanged != nil {
+		bw.OnSelectionChanged()
+	}
+	if bw.board.IsSolved() && bw.OnSolved != nil {
+		bw.OnSolved()
+	}
+	return true
+}
+
+// notifyUndoState fires OnUndoStateChanged if set.
+func (bw *BoardWidget) notifyUndoState() {
+	if bw.OnUndoStateChanged != nil {
+		bw.OnUndoStateChanged(bw.board.CanUndo())
+	}
 }
 
 // DigitCounts returns how many times each digit 1-9 appears on the board.
