@@ -2,6 +2,8 @@
 
 A fully-featured Sudoku game built with **Go** and **[Fyne](https://fyne.io/)**, targeting **iOS** and **Android** from a single codebase.
 
+For some reason there isn't a simple free Sodoku app so here is one. I added all the features I would think you would actually care about.
+
 ---
 
 ## Features
