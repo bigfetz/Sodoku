@@ -5,3 +5,6 @@ Sudoku.app/
 
 # Go
 *.test
+
+# Editor
+.vscode/

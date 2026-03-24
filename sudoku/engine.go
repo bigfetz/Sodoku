@@ -2,15 +2,21 @@
 //
 // The engine exposes a Board type with the following public operations:
 //
-//   - PlaceNumber  – place a digit (1-9) at a position; refuses invalid moves.
-//   - ClearCell    – remove a player-placed digit from a position.
-//   - GetBoard     – return the current state as a 9×9 matrix.
-//   - SetBoard     – overwrite the full board with a 9×9 matrix.
+//   - PlaceNumberForce     – place a digit (1-9) even if it conflicts; shown in red.
+//   - PlaceNumberForceUndo – like PlaceNumberForce, but records the move for undo.
+//   - ClearCell / ClearCellUndo – remove a player-placed digit.
+//   - Undo                 – reverse the most recent undoable action.
+//   - GetBoard             – return the current state as a 9×9 matrix.
+//   - SetBoard             – overwrite the board with a new puzzle matrix (locks givens).
+//   - IsSolved             – true when all cells match the cached solution.
+//   - Conflicts            – returns a 9×9 matrix flagging rule-violating cells.
+//   - GetSolution          – returns the fully-solved grid cached at SetBoard time.
 //
 // Example:
 //
 //	b := sudoku.NewBoard()
-//	ok, err := b.PlaceNumber(0, 0, 5)
+//	_ = b.SetBoard(sudoku.GenerateBoard(sudoku.Easy))
+//	_ = b.PlaceNumberForceUndo(0, 0, 5)
 //	matrix := b.GetBoard()
 package sudoku
 
@@ -47,42 +53,9 @@ func NewBoard() *Board {
 	return &Board{}
 }
 
-// NewBoardFromMatrix creates a Board pre-populated from a 9×9 matrix.
-// Non-zero values are treated as "givens" (locked cells).
-// Returns an error if the matrix dimensions are wrong or any value is invalid /
-// causes an immediate conflict.
-func NewBoardFromMatrix(matrix [BoardSize][BoardSize]int) (*Board, error) {
-	b := &Board{}
-	return b, b.loadMatrix(matrix, true)
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-
-// PlaceNumber attempts to place val (1-9) at (row, col).
-//
-// Returns:
-//   - (true,  nil)  – placement succeeded.
-//   - (false, err)  – placement was refused; the board is unchanged.
-//     Possible errors: ErrOutOfBounds, ErrInvalidValue, ErrCellLocked, ErrConflict.
-func (b *Board) PlaceNumber(row, col, val int) (bool, error) {
-	if err := boundsCheck(row, col); err != nil {
-		return false, err
-	}
-	if val < 1 || val > 9 {
-		return false, ErrInvalidValue
-	}
-	if b.cells[row][col].locked {
-		return false, ErrCellLocked
-	}
-	if !isValidPlacement(b.cells, row, col, val) {
-		return false, ErrConflict
-	}
-
-	b.cells[row][col].value = val
-	return true, nil
-}
 
 // PlaceNumberForce places val at (row, col) even if it conflicts with other
 // cells. Used by the UI to allow the player to enter a wrong answer (which is
@@ -116,21 +89,30 @@ func (b *Board) ClearCell(row, col int) error {
 	b.cells[row][col].value = 0
 	return nil
 }
-
-// IsSolved returns true when every cell is filled and no conflicts exist.
 func (b *Board) IsSolved() bool {
-	for r := 0; r < BoardSize; r++ {
-		for c := 0; c < BoardSize; c++ {
-			if b.cells[r][c].value == 0 {
-				return false
+	if b.solution == ([BoardSize][BoardSize]int{}) {
+		// No solution cached — fall back to the full conflict check.
+		for r := 0; r < BoardSize; r++ {
+			for c := 0; c < BoardSize; c++ {
+				if b.cells[r][c].value == 0 {
+					return false
+				}
 			}
 		}
+		conflicts := b.Conflicts()
+		for r := 0; r < BoardSize; r++ {
+			for c := 0; c < BoardSize; c++ {
+				if conflicts[r][c] {
+					return false
+				}
+			}
+		}
+		return true
 	}
-	// All cells filled — check there are no conflicts.
-	conflicts := b.Conflicts()
+	// Fast path: compare directly against the cached solution — O(81), no allocs.
 	for r := 0; r < BoardSize; r++ {
 		for c := 0; c < BoardSize; c++ {
-			if conflicts[r][c] {
+			if b.cells[r][c].value != b.solution[r][c] {
 				return false
 			}
 		}
@@ -213,12 +195,6 @@ func (b *Board) SetBoard(matrix [BoardSize][BoardSize]int) error {
 	return nil
 }
 
-// SetSolution stores the fully-solved grid for this puzzle so GetHint works
-// even when the puzzle was loaded without re-solving.
-func (b *Board) SetSolution(sol [BoardSize][BoardSize]int) {
-	b.solution = sol
-}
-
 // PlaceNumberForceUndo is like PlaceNumberForce but records the action on
 // the undo stack. Returns the same errors as PlaceNumberForce.
 func (b *Board) PlaceNumberForceUndo(row, col, val int) error {
@@ -251,11 +227,6 @@ func (b *Board) Undo() (int, int, bool) {
 	b.undoStack = b.undoStack[:len(b.undoStack)-1]
 	b.cells[m.row][m.col].value = m.oldVal
 	return m.row, m.col, true
-}
-
-// ClearUndo empties the undo stack. Call this when a new puzzle is loaded.
-func (b *Board) ClearUndo() {
-	b.undoStack = nil
 }
 
 // CanUndo reports whether there is anything to undo.
@@ -310,6 +281,18 @@ func (b *Board) GetHint(rng interface{ Intn(int) int }) (int, int, int, bool) {
 	return pick.r, pick.c, pick.v, true
 }
 
+// GetSolution returns the fully-solved grid that was cached when SetBoard was
+// called. Returns an all-zero matrix if no solution has been cached yet.
+func (b *Board) GetSolution() [BoardSize][BoardSize]int {
+	return b.solution
+}
+
+// SetSolutionCache explicitly stores the fully-solved grid. Use this when
+// restoring a saved session that persisted the solution separately.
+func (b *Board) SetSolutionCache(sol [BoardSize][BoardSize]int) {
+	b.solution = sol
+}
+
 // LockedCells returns a 9×9 boolean matrix where true means the cell is a
 // puzzle "given" (locked) and cannot be modified by the player.
 func (b *Board) LockedCells() [BoardSize][BoardSize]bool {
@@ -325,7 +308,45 @@ func (b *Board) LockedCells() [BoardSize][BoardSize]bool {
 // Conflicts returns a 9×9 boolean matrix where true means the cell's current
 // value violates Sudoku rules (duplicate in its row, column, or 3×3 box).
 // Empty cells (value 0) are never flagged.
+//
+// The implementation uses a single-pass bitmask strategy: each row, column,
+// and box gets a uint16 where bit n is set when digit n has already been seen.
+// A cell is a conflict when its digit bit is already set in any of its three
+// groups (row, col, box). Both occurrences are marked, so the second pass
+// flags each cell whose value bit is set in the pre-built duplicate mask.
 func (b *Board) Conflicts() [BoardSize][BoardSize]bool {
+	// First pass: count occurrences per digit per group using bitmask OR.
+	// duplicateRows[r] has bit n set if digit n appears more than once in row r.
+	var seenRows, seenCols, seenBoxes [BoardSize]uint16
+	var dupRows, dupCols, dupBoxes [BoardSize]uint16
+
+	for r := 0; r < BoardSize; r++ {
+		for c := 0; c < BoardSize; c++ {
+			v := b.cells[r][c].value
+			if v == 0 {
+				continue
+			}
+			bit := uint16(1) << v
+			box := (r/BoxSize)*BoxSize + c/BoxSize
+
+			if seenRows[r]&bit != 0 {
+				dupRows[r] |= bit
+			}
+			seenRows[r] |= bit
+
+			if seenCols[c]&bit != 0 {
+				dupCols[c] |= bit
+			}
+			seenCols[c] |= bit
+
+			if seenBoxes[box]&bit != 0 {
+				dupBoxes[box] |= bit
+			}
+			seenBoxes[box] |= bit
+		}
+	}
+
+	// Second pass: flag each cell whose digit is in any duplicate mask.
 	var m [BoardSize][BoardSize]bool
 	for r := 0; r < BoardSize; r++ {
 		for c := 0; c < BoardSize; c++ {
@@ -333,15 +354,29 @@ func (b *Board) Conflicts() [BoardSize][BoardSize]bool {
 			if v == 0 {
 				continue
 			}
-			// Temporarily clear the cell so isValidPlacement checks neighbours.
-			b.cells[r][c].value = 0
-			if !isValidPlacement(b.cells, r, c, v) {
+			bit := uint16(1) << v
+			box := (r/BoxSize)*BoxSize + c/BoxSize
+			if dupRows[r]&bit != 0 || dupCols[c]&bit != 0 || dupBoxes[box]&bit != 0 {
 				m[r][c] = true
 			}
-			b.cells[r][c].value = v
 		}
 	}
 	return m
+}
+
+// CountDigits returns the count of each placed digit (1-9) on the board.
+// Index 0 is always 0; indices 1-9 hold the count of that digit.
+// This avoids the matrix allocation of GetBoard() for digit-count queries.
+func (b *Board) CountDigits() [10]int {
+	var counts [10]int
+	for r := 0; r < BoardSize; r++ {
+		for c := 0; c < BoardSize; c++ {
+			if v := b.cells[r][c].value; v >= 1 && v <= 9 {
+				counts[v]++
+			}
+		}
+	}
+	return counts
 }
 
 // ---------------------------------------------------------------------------
@@ -385,17 +420,4 @@ func boundsCheck(row, col int) error {
 		return ErrOutOfBounds
 	}
 	return nil
-}
-
-// applySolution writes a fully-solved matrix back into the board, overwriting
-// only non-locked (player) cells and preserving locked-cell status.
-// The matrix must be a complete, valid solution derived from this board.
-func (b *Board) applySolution(solution [BoardSize][BoardSize]int) {
-	for r := 0; r < BoardSize; r++ {
-		for c := 0; c < BoardSize; c++ {
-			if !b.cells[r][c].locked {
-				b.cells[r][c].value = solution[r][c]
-			}
-		}
-	}
 }

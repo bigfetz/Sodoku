@@ -124,22 +124,6 @@ func solveInPlace(b *[BoardSize][BoardSize]int, count *int) bool {
 	return false
 }
 
-// Solve attempts to solve the puzzle currently loaded in b.
-// It fills every empty cell with the unique solution value.
-// Returns true if a solution was found, false if the puzzle is unsolvable.
-// Locked cells (givens) are never modified.
-func Solve(b *Board) bool {
-	m := b.GetBoard()
-	count := 0
-	solve(&m, &count, 1)
-	if count == 0 {
-		return false
-	}
-	// Write solution back without changing locked-cell status.
-	b.applySolution(m)
-	return true
-}
-
 // countSolutions counts the number of solutions for b, stopping as soon as
 // limit solutions have been found (avoids exhaustive search).
 func countSolutions(b *[BoardSize][BoardSize]int, limit int) int {

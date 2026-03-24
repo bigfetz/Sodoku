@@ -14,6 +14,7 @@ import (
 const (
 	sesKeyPuzzle     = "session.puzzle"     // 81 comma-separated ints (locked givens)
 	sesKeyPlayer     = "session.player"     // 81 comma-separated ints (player moves)
+	sesKeySolution   = "session.solution"   // 81 comma-separated ints (full solved grid)
 	sesKeyDifficulty = "session.difficulty" // int
 	sesKeyElapsed    = "session.elapsed"    // seconds (int)
 	sesKeyHints      = "session.hints"      // hints remaining (int)
@@ -26,6 +27,7 @@ const (
 type sessionData struct {
 	puzzle     [sudoku.BoardSize][sudoku.BoardSize]int
 	player     [sudoku.BoardSize][sudoku.BoardSize]int
+	solution   [sudoku.BoardSize][sudoku.BoardSize]int
 	difficulty sudoku.Difficulty
 	elapsed    int // seconds
 	hints      int
@@ -39,9 +41,11 @@ type sessionData struct {
 func SaveSession(prefs fyne.Preferences, board *sudoku.Board, difficulty sudoku.Difficulty, elapsedSecs int, hintsLeft int, mistakes int) {
 	puzzle := board.GetLockedBoard()
 	player := board.GetPlayerBoard()
+	solution := board.GetSolution()
 
 	prefs.SetString(sesKeyPuzzle, encodeMatrix(puzzle))
 	prefs.SetString(sesKeyPlayer, encodeMatrix(player))
+	prefs.SetString(sesKeySolution, encodeMatrix(solution))
 	prefs.SetInt(sesKeyDifficulty, int(difficulty))
 	prefs.SetInt(sesKeyElapsed, elapsedSecs)
 	prefs.SetInt(sesKeyHints, hintsLeft)
@@ -68,9 +72,15 @@ func LoadSession(prefs fyne.Preferences) (sessionData, bool) {
 		return sessionData{}, false
 	}
 
+	// Solution is optional (may be absent in sessions saved before this field
+	// was introduced). If absent or invalid, leave it as the zero matrix — the
+	// widget will fall back gracefully (no culprit highlighting).
+	solution, _ := decodeMatrix(prefs.String(sesKeySolution))
+
 	return sessionData{
 		puzzle:     puzzle,
 		player:     player,
+		solution:   solution,
 		difficulty: sudoku.Difficulty(prefs.IntWithFallback(sesKeyDifficulty, int(sudoku.Easy))),
 		elapsed:    prefs.IntWithFallback(sesKeyElapsed, 0),
 		hints:      prefs.IntWithFallback(sesKeyHints, 3),

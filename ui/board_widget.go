@@ -52,16 +52,18 @@ func boardSideFromCellSize(cs float32) float32 {
 
 // Light-mode palette (default).
 var (
-	colBackground   = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
-	colGridThin     = color.NRGBA{R: 0xAA, G: 0xAA, B: 0xAA, A: 0xFF}
-	colGridThick    = color.NRGBA{R: 0x22, G: 0x22, B: 0x22, A: 0xFF}
-	colSelected     = color.NRGBA{R: 0xBB, G: 0xD7, B: 0xF8, A: 0xFF}
-	colHighlight    = color.NRGBA{R: 0xDA, G: 0xEB, B: 0xFB, A: 0xFF}
-	colLockedText   = color.NRGBA{R: 0x1A, G: 0x1A, B: 0x1A, A: 0xFF}
-	colPlayerText   = color.NRGBA{R: 0x1A, G: 0x5F, B: 0xC8, A: 0xFF}
-	colConflictBg   = color.NRGBA{R: 0xFC, G: 0xD0, B: 0xCE, A: 0xFF}
-	colConflictText = color.NRGBA{R: 0xC0, G: 0x20, B: 0x20, A: 0xFF}
-	colSameValue    = color.NRGBA{R: 0xA8, G: 0xC8, B: 0xF0, A: 0xFF} // other cells with the same digit
+	colBackground          = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
+	colGridThin            = color.NRGBA{R: 0xAA, G: 0xAA, B: 0xAA, A: 0xFF}
+	colGridThick           = color.NRGBA{R: 0x22, G: 0x22, B: 0x22, A: 0xFF}
+	colSelected            = color.NRGBA{R: 0xBB, G: 0xD7, B: 0xF8, A: 0xFF}
+	colHighlight           = color.NRGBA{R: 0xDA, G: 0xEB, B: 0xFB, A: 0xFF}
+	colLockedText          = color.NRGBA{R: 0x1A, G: 0x1A, B: 0x1A, A: 0xFF}
+	colPlayerText          = color.NRGBA{R: 0x1A, G: 0x5F, B: 0xC8, A: 0xFF}
+	colConflictBg          = color.NRGBA{R: 0xFC, G: 0xD0, B: 0xCE, A: 0xFF}
+	colConflictText        = color.NRGBA{R: 0xC0, G: 0x20, B: 0x20, A: 0xFF}
+	colConflictCulpritBg   = color.NRGBA{R: 0xE8, G: 0x20, B: 0x20, A: 0xFF} // the cell the player just entered
+	colConflictCulpritText = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
+	colSameValue           = color.NRGBA{R: 0xA8, G: 0xC8, B: 0xF0, A: 0xFF} // other cells with the same digit
 
 	// Flash colours.
 	colFlashError = color.NRGBA{R: 0xFF, G: 0x45, B: 0x45, A: 0xFF} // red error fade
@@ -80,6 +82,8 @@ func SetDarkMode(dark bool) {
 		colPlayerText = color.NRGBA{R: 0x5B, G: 0xB8, B: 0xFF, A: 0xFF}
 		colConflictBg = color.NRGBA{R: 0x5A, G: 0x10, B: 0x10, A: 0xFF}
 		colConflictText = color.NRGBA{R: 0xFF, G: 0x60, B: 0x60, A: 0xFF}
+		colConflictCulpritBg = color.NRGBA{R: 0xCC, G: 0x10, B: 0x10, A: 0xFF}
+		colConflictCulpritText = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
 		colSameValue = color.NRGBA{R: 0x1E, G: 0x3A, B: 0x58, A: 0xFF}
 	} else {
 		colBackground = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
@@ -91,6 +95,8 @@ func SetDarkMode(dark bool) {
 		colPlayerText = color.NRGBA{R: 0x1A, G: 0x5F, B: 0xC8, A: 0xFF}
 		colConflictBg = color.NRGBA{R: 0xFC, G: 0xD0, B: 0xCE, A: 0xFF}
 		colConflictText = color.NRGBA{R: 0xC0, G: 0x20, B: 0x20, A: 0xFF}
+		colConflictCulpritBg = color.NRGBA{R: 0xE8, G: 0x20, B: 0x20, A: 0xFF}
+		colConflictCulpritText = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
 		colSameValue = color.NRGBA{R: 0xA8, G: 0xC8, B: 0xF0, A: 0xFF}
 	}
 }
@@ -119,6 +125,11 @@ type BoardWidget struct {
 	selRow   int // -1 = nothing selected
 	selCol   int
 	conflict [sudoku.BoardSize][sudoku.BoardSize]bool
+
+	// solution is the fully-solved grid. Any player cell whose value differs
+	// from the corresponding solution cell is considered a "culprit" and gets
+	// the vivid red colouring regardless of how many wrong digits are on the board.
+	solution [sudoku.BoardSize][sudoku.BoardSize]int
 
 	// gridOX/gridOY are the pixel offsets from the widget origin to the top-left
 	// corner of the drawn grid. Set by Layout; used by Tapped for hit-testing.
@@ -166,6 +177,11 @@ type BoardWidget struct {
 
 	// OnErrorCountChanged is called whenever errorCount changes.
 	OnErrorCountChanged func(int)
+
+	// solved is set to true when OnSolved fires so subsequent notifyBoardChanged
+	// calls (from the same PlaceDigit invocation) don't re-save the session and
+	// undo the ClearSession that OnSolved just performed.
+	solved bool
 }
 
 // NewBoardWidget creates a BoardWidget backed by the given engine Board.
@@ -176,8 +192,23 @@ func NewBoardWidget(b *sudoku.Board) *BoardWidget {
 		selCol:     -1,
 		flashCells: make(map[flashKey]*flashEntry),
 	}
+	bw.solution = b.GetSolution()
 	bw.ExtendBaseWidget(bw)
 	return bw
+}
+
+// isCulprit returns true when the cell at (row, col) holds a player-placed
+// value that contradicts the known solution — i.e. it is wrong.
+// Locked (given) cells and empty cells are never culprits.
+// matrix and locked must be the pre-fetched GetBoard/LockedCells snapshots
+// so this method causes zero allocations.
+func (bw *BoardWidget) isCulprit(row, col int, matrix [sudoku.BoardSize][sudoku.BoardSize]int, locked [sudoku.BoardSize][sudoku.BoardSize]bool) bool {
+	want := bw.solution[row][col]
+	if want == 0 {
+		return false // no solution known for this cell
+	}
+	got := matrix[row][col]
+	return !locked[row][col] && got != 0 && got != want
 }
 
 // UpdateBoard replaces the engine's board state with matrix and refreshes.
@@ -191,7 +222,9 @@ func (bw *BoardWidget) UpdateBoard(matrix [sudoku.BoardSize][sudoku.BoardSize]in
 	bw.flashCells = make(map[flashKey]*flashEntry)
 	bw.flashMu.Unlock()
 	bw.selRow, bw.selCol = -1, -1
+	bw.solution = bw.board.GetSolution()
 	bw.errorCount = 0
+	bw.solved = false
 	if bw.OnErrorCountChanged != nil {
 		bw.OnErrorCountChanged(0)
 	}
@@ -212,7 +245,9 @@ func (bw *BoardWidget) PlaceDigit(digit int) {
 	if bw.selRow < 0 {
 		return
 	}
-	prevConflict := bw.board.Conflicts()
+	// Snapshot the conflict state before mutating; bw.conflict is always kept
+	// current so this is free — no extra bitmask call needed.
+	prevConflict := bw.conflict
 	// Use ForcePlace so a conflicting number is written to the board and shown
 	// in red, rather than being silently rejected.
 	var err error
@@ -239,6 +274,7 @@ func (bw *BoardWidget) PlaceDigit(digit int) {
 			bw.checkCompletions(prevConflict)
 			// Check if the whole puzzle is now solved.
 			if bw.board.IsSolved() && bw.OnSolved != nil {
+				bw.solved = true
 				bw.OnSolved()
 			}
 		}
@@ -249,7 +285,7 @@ func (bw *BoardWidget) PlaceDigit(digit int) {
 	}
 	bw.Refresh()
 	bw.notifyDigitCounts()
-	if !bw.solving {
+	if !bw.solving && !bw.solved {
 		bw.notifyBoardChanged()
 	}
 }
@@ -291,7 +327,7 @@ func (bw *BoardWidget) ApplyHint() bool {
 	if !ok {
 		return false
 	}
-	prevConflict := bw.board.Conflicts()
+	prevConflict := bw.conflict // bw.conflict is always current — no extra bitmask call needed
 	_ = bw.board.PlaceNumberForceUndo(r, c, v)
 	bw.selRow, bw.selCol = r, c
 	bw.conflict = bw.board.Conflicts()
@@ -328,16 +364,7 @@ func (bw *BoardWidget) notifyBoardChanged() {
 // DigitCounts returns how many times each digit 1-9 appears on the board.
 // Index 0 is unused; index d holds the count for digit d.
 func (bw *BoardWidget) DigitCounts() [10]int {
-	var counts [10]int
-	m := bw.board.GetBoard()
-	for r := 0; r < sudoku.BoardSize; r++ {
-		for c := 0; c < sudoku.BoardSize; c++ {
-			if v := m[r][c]; v >= 1 && v <= 9 {
-				counts[v]++
-			}
-		}
-	}
-	return counts
+	return bw.board.CountDigits()
 }
 
 // notifyDigitCounts calls the registered callback if set.
@@ -545,10 +572,23 @@ func (bw *BoardWidget) flashColour(row, col int) *color.NRGBA {
 // complete and conflict-free, it fires a wave animation across those cells.
 func (bw *BoardWidget) checkCompletions(prevConflict [sudoku.BoardSize][sudoku.BoardSize]bool) {
 	m := bw.board.GetBoard()
-	conflicts := bw.conflict
+	sol := bw.solution
+	hasSolution := sol != ([sudoku.BoardSize][sudoku.BoardSize]int{})
 
+	// isComplete returns true when every cell in the group matches the solution
+	// (fast path), or when all 9 cells are filled, distinct, and conflict-free
+	// (fallback when no solution is cached).
 	isComplete := func(cells [][2]int) bool {
+		if hasSolution {
+			for _, rc := range cells {
+				if m[rc[0]][rc[1]] != sol[rc[0]][rc[1]] {
+					return false
+				}
+			}
+			return true
+		}
 		seen := make(map[int]bool, 9)
+		conflicts := bw.conflict
 		for _, rc := range cells {
 			v := m[rc[0]][rc[1]]
 			if v == 0 || conflicts[rc[0]][rc[1]] {
@@ -560,6 +600,24 @@ func (bw *BoardWidget) checkCompletions(prevConflict [sudoku.BoardSize][sudoku.B
 	}
 
 	wasComplete := func(cells [][2]int) bool {
+		if hasSolution {
+			// The group was already complete before this move if every cell
+			// already matched the solution in the previous board state. Since we
+			// only have one delta (the just-placed cell), we approximate by
+			// checking whether the group was conflict-free and full before.
+			// The simplest correct check: if it's complete now AND the placed
+			// cell was already correct before (prevConflict had no issues in
+			// this group), assume it was already done — don't re-fire the wave.
+			for _, rc := range cells {
+				if prevConflict[rc[0]][rc[1]] {
+					return false // group had a conflict before this move
+				}
+				if m[rc[0]][rc[1]] == 0 {
+					return false // group wasn't full before this move
+				}
+			}
+			return true
+		}
 		seen := make(map[int]bool, 9)
 		for _, rc := range cells {
 			v := m[rc[0]][rc[1]]
@@ -777,6 +835,7 @@ type boardRenderer struct {
 	cellBgs    [sudoku.BoardSize][sudoku.BoardSize]*canvas.Rectangle
 	cellLabels [sudoku.BoardSize][sudoku.BoardSize]*canvas.Text
 	lines      []fyne.CanvasObject
+	objects    []fyne.CanvasObject // cached — built once in build(), never reallocated
 }
 
 func (r *boardRenderer) build() {
@@ -798,6 +857,21 @@ func (r *boardRenderer) build() {
 	for i := range r.lines {
 		r.lines[i] = canvas.NewRectangle(colGridThin)
 	}
+
+	// Build the objects slice once — 1 bg + 81 cellBgs + 81 cellLabels + 20 lines = 183 objects.
+	r.objects = make([]fyne.CanvasObject, 0, 1+sudoku.BoardSize*sudoku.BoardSize*2+total)
+	r.objects = append(r.objects, r.bg)
+	for row := 0; row < sudoku.BoardSize; row++ {
+		for col := 0; col < sudoku.BoardSize; col++ {
+			r.objects = append(r.objects, r.cellBgs[row][col])
+		}
+	}
+	for row := 0; row < sudoku.BoardSize; row++ {
+		for col := 0; col < sudoku.BoardSize; col++ {
+			r.objects = append(r.objects, r.cellLabels[row][col])
+		}
+	}
+	r.objects = append(r.objects, r.lines...)
 }
 
 // Layout is called by Fyne every time the widget is resized.
@@ -838,7 +912,7 @@ func (r *boardRenderer) Layout(size fyne.Size) {
 			bg := r.cellBgs[row][col]
 			bg.Move(fyne.NewPos(cx, cy))
 			bg.Resize(fyne.NewSize(cs, cs))
-			bg.FillColor = r.cellBgColour(row, col)
+			bg.FillColor = r.cellBgColour(row, col, matrix, lockedMatrix)
 
 			lbl := r.cellLabels[row][col]
 			lbl.TextSize = fontSize
@@ -852,7 +926,11 @@ func (r *boardRenderer) Layout(size fyne.Size) {
 				lbl.Text = string(rune('0' + v))
 			}
 			if r.bw.conflict[row][col] {
-				lbl.Color = colConflictText
+				if r.bw.isCulprit(row, col, matrix, lockedMatrix) {
+					lbl.Color = colConflictCulpritText
+				} else {
+					lbl.Color = colConflictText
+				}
 			} else if lockedMatrix[row][col] {
 				lbl.Color = colLockedText
 			} else {
@@ -910,18 +988,23 @@ func (r *boardRenderer) Layout(size fyne.Size) {
 	}
 }
 
-func (r *boardRenderer) cellBgColour(row, col int) color.Color {
+func (r *boardRenderer) cellBgColour(row, col int, matrix [sudoku.BoardSize][sudoku.BoardSize]int, locked [sudoku.BoardSize][sudoku.BoardSize]bool) color.Color {
 	bw := r.bw
 
 	// Determine the base background colour first.
 	var base color.NRGBA
 	if bw.conflict[row][col] {
-		base = colConflictBg
+		// The cell the player typed wrongly gets a solid deep-red ("culprit")
+		// background; other cells that collide with it get the pale wash.
+		if bw.isCulprit(row, col, matrix, locked) {
+			base = colConflictCulpritBg
+		} else {
+			base = colConflictBg
+		}
 	} else if !bw.solving && bw.selRow == row && bw.selCol == col {
 		base = colSelected
 	} else if !bw.solving && bw.selRow >= 0 {
 		sr, sc := bw.selRow, bw.selCol
-		matrix := bw.board.GetBoard()
 		selVal := matrix[sr][sc]
 
 		if selVal != 0 && matrix[row][col] == selVal {
@@ -969,19 +1052,7 @@ func (r *boardRenderer) Refresh() {
 func (r *boardRenderer) Destroy() {}
 
 func (r *boardRenderer) Objects() []fyne.CanvasObject {
-	objs := []fyne.CanvasObject{r.bg}
-	for row := 0; row < sudoku.BoardSize; row++ {
-		for col := 0; col < sudoku.BoardSize; col++ {
-			objs = append(objs, r.cellBgs[row][col])
-		}
-	}
-	for row := 0; row < sudoku.BoardSize; row++ {
-		for col := 0; col < sudoku.BoardSize; col++ {
-			objs = append(objs, r.cellLabels[row][col])
-		}
-	}
-	objs = append(objs, r.lines...)
-	return objs
+	return r.objects
 }
 
 func lineColour(thick bool) color.Color {
