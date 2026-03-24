@@ -157,6 +157,10 @@ type BoardWidget struct {
 	// so the UI can enable/disable the undo button.
 	OnUndoStateChanged func(canUndo bool)
 
+	// OnBoardChanged is called after every player mutation (place, clear, undo,
+	// hint). Use it to save session state immediately so iOS SIGKILL is safe.
+	OnBoardChanged func()
+
 	// errorCount tracks how many wrong numbers the player has entered this game.
 	errorCount int
 
@@ -245,6 +249,9 @@ func (bw *BoardWidget) PlaceDigit(digit int) {
 	}
 	bw.Refresh()
 	bw.notifyDigitCounts()
+	if !bw.solving {
+		bw.notifyBoardChanged()
+	}
 }
 
 // ClearSelected clears the currently selected cell (called by numpad).
@@ -257,6 +264,7 @@ func (bw *BoardWidget) ClearSelected() {
 	bw.notifyUndoState()
 	bw.Refresh()
 	bw.notifyDigitCounts()
+	bw.notifyBoardChanged()
 }
 
 // UndoLast reverses the most recent player action.
@@ -270,6 +278,7 @@ func (bw *BoardWidget) UndoLast() {
 	bw.notifyUndoState()
 	bw.Refresh()
 	bw.notifyDigitCounts()
+	bw.notifyBoardChanged()
 	if bw.OnSelectionChanged != nil {
 		bw.OnSelectionChanged()
 	}
@@ -290,6 +299,9 @@ func (bw *BoardWidget) ApplyHint() bool {
 	bw.notifyUndoState()
 	bw.Refresh()
 	bw.notifyDigitCounts()
+	// Note: OnBoardChanged is NOT fired here; the hint button in app.go
+	// decrements hintsLeft first and then calls saveCurrent so the saved
+	// hints count is always correct.
 	if bw.OnSelectionChanged != nil {
 		bw.OnSelectionChanged()
 	}
@@ -303,6 +315,13 @@ func (bw *BoardWidget) ApplyHint() bool {
 func (bw *BoardWidget) notifyUndoState() {
 	if bw.OnUndoStateChanged != nil {
 		bw.OnUndoStateChanged(bw.board.CanUndo())
+	}
+}
+
+// notifyBoardChanged fires OnBoardChanged if set.
+func (bw *BoardWidget) notifyBoardChanged() {
+	if bw.OnBoardChanged != nil {
+		bw.OnBoardChanged()
 	}
 }
 

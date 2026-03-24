@@ -150,6 +150,48 @@ func (b *Board) GetBoard() [BoardSize][BoardSize]int {
 	return matrix
 }
 
+// GetLockedBoard returns a 9×9 matrix containing only the puzzle givens
+// (locked cells). Player-placed values are returned as 0.
+// Use this to persist the original puzzle so it can be reloaded cleanly.
+func (b *Board) GetLockedBoard() [BoardSize][BoardSize]int {
+	var matrix [BoardSize][BoardSize]int
+	for r := 0; r < BoardSize; r++ {
+		for c := 0; c < BoardSize; c++ {
+			if b.cells[r][c].locked {
+				matrix[r][c] = b.cells[r][c].value
+			}
+		}
+	}
+	return matrix
+}
+
+// GetPlayerBoard returns a 9×9 matrix containing only player-placed values.
+// Locked (given) cells are returned as 0.
+// Use this alongside GetLockedBoard to persist and restore a session.
+func (b *Board) GetPlayerBoard() [BoardSize][BoardSize]int {
+	var matrix [BoardSize][BoardSize]int
+	for r := 0; r < BoardSize; r++ {
+		for c := 0; c < BoardSize; c++ {
+			if !b.cells[r][c].locked {
+				matrix[r][c] = b.cells[r][c].value
+			}
+		}
+	}
+	return matrix
+}
+
+// RestorePlayerBoard writes player-placed values back onto the board without
+// locking them. Locked cells are skipped. Used when resuming a saved session.
+func (b *Board) RestorePlayerBoard(player [BoardSize][BoardSize]int) {
+	for r := 0; r < BoardSize; r++ {
+		for c := 0; c < BoardSize; c++ {
+			if !b.cells[r][c].locked && player[r][c] != 0 {
+				b.cells[r][c].value = player[r][c]
+			}
+		}
+	}
+}
+
 // SetBoard replaces the entire board with the provided 9×9 matrix.
 // All non-zero values are treated as new "givens" (locked cells).
 // The operation is atomic: if any value is invalid or causes a conflict the
@@ -219,6 +261,25 @@ func (b *Board) ClearUndo() {
 // CanUndo reports whether there is anything to undo.
 func (b *Board) CanUndo() bool {
 	return len(b.undoStack) > 0
+}
+
+// GetUndoStack returns a snapshot of the undo stack as a flat slice of
+// [row, col, oldVal, newVal] quads. Used for session persistence.
+func (b *Board) GetUndoStack() [][4]int {
+	out := make([][4]int, len(b.undoStack))
+	for i, m := range b.undoStack {
+		out[i] = [4]int{m.row, m.col, m.oldVal, m.newVal}
+	}
+	return out
+}
+
+// RestoreUndoStack replaces the undo stack from a previously saved snapshot.
+// Call this after RestorePlayerBoard when resuming a session.
+func (b *Board) RestoreUndoStack(stack [][4]int) {
+	b.undoStack = make([]move, len(stack))
+	for i, q := range stack {
+		b.undoStack[i] = move{row: q[0], col: q[1], oldVal: q[2], newVal: q[3]}
+	}
 }
 
 // GetHint returns (row, col, value, true) for one randomly chosen empty

@@ -15,5 +15,8 @@ echo "==> Installing on Android device..."
 adb shell settings put global verifier_verify_adb_installs 0
 adb install -r Sudoku.apk
 
+echo "==> Cleaning up APK..."
+rm -f Sudoku.apk
+
 echo ""
 echo "✅ Done! Find 'Sudoku' on your Android device."

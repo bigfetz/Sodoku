@@ -59,6 +59,19 @@ func (gt *gameTimer) start() {
 	gt.runTicker()
 }
 
+// startWithOffset starts the timer with a pre-existing elapsed duration,
+// used when restoring a saved session.
+func (gt *gameTimer) startWithOffset(offset time.Duration) {
+	gt.mu.Lock()
+	gt.elapsed = offset
+	gt.done = false
+	gt.paused = false
+	gt.startAt = time.Now()
+	gt.stopCh = make(chan struct{})
+	gt.mu.Unlock()
+	gt.runTicker()
+}
+
 func (gt *gameTimer) runTicker() {
 	go func() {
 		ticker := time.NewTicker(time.Second)
@@ -154,19 +167,40 @@ func forcedTheme(variant fyne.ThemeVariant) fyne.Theme {
 // Run creates the Fyne application, builds the main window, and blocks until
 // the window is closed.
 func Run() {
-	a := app.New()
+	a := app.NewWithID("Fetzco.com-matthewfetzer-sudoku")
 
 	w := a.NewWindow("Sudoku")
 
+	// ---- Session restore or fresh start ------------------------------------
 	board := sudoku.NewBoard()
-	_ = board.SetBoard(starterPuzzle())
+	startElapsed := 0
+	startHints := 3
+	startDifficulty := sudoku.Easy
+	startMistakes := 0
+
+	if sess, ok := LoadSession(a.Preferences()); ok {
+		// Restore the puzzle givens, then layer player moves on top.
+		_ = board.SetBoard(sess.puzzle)
+		board.RestorePlayerBoard(sess.player)
+		board.RestoreUndoStack(sess.undoStack)
+		startElapsed = sess.elapsed
+		startHints = sess.hints
+		startDifficulty = sess.difficulty
+		startMistakes = sess.mistakes
+	} else {
+		_ = board.SetBoard(sudoku.GenerateBoard(sudoku.Easy))
+	}
 
 	bw := NewBoardWidget(board)
 	bw.conflict = board.Conflicts()
+	bw.errorCount = startMistakes // restore mistake count before any callbacks wire up
 
 	// currentDifficulty tracks the active puzzle for stats recording.
-	// Starter puzzle counts as Easy.
-	currentDifficulty := sudoku.Easy
+	currentDifficulty := startDifficulty
+
+	// saveCurrent is declared here so closures in the toolbar can reference it
+	// before it is fully assigned after the timer is created.
+	var saveCurrent func()
 
 	// ---- Toolbar -----------------------------------------------------------
 
@@ -186,21 +220,31 @@ func Run() {
 	})
 	undoBtn.Disable()
 
-	// Hint button.
-	hintsLeft := 3
-	hintBtn := widget.NewButton(fmt.Sprintf("Hint (%d)", hintsLeft), func() {})
+	// Hint button — restore remaining hints from session if resuming.
+	hintsLeft := startHints
+	var hintBtn *widget.Button
+	hintBtnLabel := func() string {
+		if hintsLeft > 0 {
+			return fmt.Sprintf("Hint (%d)", hintsLeft)
+		}
+		return "No Hints"
+	}
+	hintBtn = widget.NewButton(hintBtnLabel(), func() {})
+	if hintsLeft == 0 {
+		hintBtn.Disable()
+	}
 	hintBtn.OnTapped = func() {
 		if hintsLeft <= 0 {
 			return
 		}
 		if bw.ApplyHint() {
 			hintsLeft--
-			if hintsLeft > 0 {
-				hintBtn.SetText(fmt.Sprintf("Hint (%d)", hintsLeft))
-			} else {
-				hintBtn.SetText("No Hints")
+			hintBtn.SetText(hintBtnLabel())
+			if hintsLeft == 0 {
 				hintBtn.Disable()
 			}
+			// Save immediately after hint so hintsLeft is correct.
+			saveCurrent()
 		}
 	}
 
@@ -239,7 +283,13 @@ func Run() {
 	bw.OnDigitCountsChanged = refreshNumpad
 
 	// ---- Error counter -----------------------------------------------------
-	errorLabel := canvas.NewText("Mistakes: 0", colErrorLabel)
+	// Initialise text from restored session (may be non-zero on resume).
+	errorLabelText := fmt.Sprintf("Mistakes: %d", startMistakes)
+	errorLabelCol := colErrorLabel
+	if startMistakes > 0 {
+		errorLabelCol = colErrorLabelActive
+	}
+	errorLabel := canvas.NewText(errorLabelText, errorLabelCol)
 	errorLabel.TextSize = 16
 	errorLabel.TextStyle = fyne.TextStyle{Bold: true}
 	errorLabel.Alignment = fyne.TextAlignCenter
@@ -252,6 +302,11 @@ func Run() {
 			errorLabel.Color = colErrorLabelActive
 		}
 		errorLabel.Refresh()
+	}
+
+	// Restore undo button state if the stack was loaded from session.
+	if board.CanUndo() {
+		undoBtn.Enable()
 	}
 
 	// ---- Timer -------------------------------------------------------------
@@ -280,14 +335,38 @@ func Run() {
 	}
 
 	gt := &gameTimer{label: timerLabel}
-	gt.start()
+	if startElapsed > 0 {
+		gt.startWithOffset(time.Duration(startElapsed) * time.Second)
+	} else {
+		gt.start()
+	}
 
 	// Sync colours/widget state to the detected startup theme.
 	SetDarkMode(darkMode)
 	setStatColours(darkMode)
 
+	// saveCurrent persists the ongoing game state so it survives app restarts.
+	// The var is declared earlier so toolbar closures (hint button) can call it.
+	saveCurrent = func() {
+		gt.mu.Lock()
+		var elapsed time.Duration
+		if gt.paused || gt.done {
+			elapsed = gt.elapsed
+		} else {
+			elapsed = gt.elapsed + time.Since(gt.startAt)
+		}
+		gt.mu.Unlock()
+		SaveSession(a.Preferences(), board, currentDifficulty, int(elapsed.Seconds()), hintsLeft, bw.errorCount)
+	}
+
+	// Save on every player move so iOS SIGKILL can't lose progress.
+	bw.OnBoardChanged = saveCurrent
+
 	// Pause/resume the timer when the app backgrounds/foregrounds.
-	a.Lifecycle().SetOnExitedForeground(func() { gt.pause() })
+	a.Lifecycle().SetOnExitedForeground(func() {
+		gt.pause()
+		saveCurrent()
+	})
 	a.Lifecycle().SetOnEnteredForeground(func() { gt.resume() })
 
 	// Wire undo button enable/disable to board undo stack state.
@@ -300,12 +379,14 @@ func Run() {
 	}
 
 	// Reset timer, mistakes, hints, and undo stack when a new game starts.
+	// Also clear any saved session — the new game will be saved on next background.
 	bw.OnNewGame = func() {
 		gt.reset()
 		hintsLeft = 3
-		hintBtn.SetText(fmt.Sprintf("Hint (%d)", hintsLeft))
+		hintBtn.SetText(hintBtnLabel())
 		hintBtn.Enable()
 		undoBtn.Disable()
+		ClearSession(a.Preferences())
 	}
 
 	// Stop timer and record win when puzzle is solved by the player.
@@ -313,11 +394,13 @@ func Run() {
 		gt.stop()
 		elapsed := int(gt.elapsed.Seconds())
 		RecordWin(a.Preferences(), currentDifficulty, elapsed)
+		ClearSession(a.Preferences())
 	}
 
 	// Auto-solve: stop the timer but do not record in stats.
 	bw.OnAutoSolved = func() {
 		gt.stop()
+		ClearSession(a.Preferences())
 	}
 
 	// ---- Full layout -------------------------------------------------------
@@ -339,8 +422,11 @@ func Run() {
 	w.SetContent(content)
 	w.Canvas().Focus(bw)
 
-	// Stop the timer cleanly when the window is closed.
+	// Stop the timer and save session when the window is closed (desktop/simulator).
+	// On real iOS/Android the app is killed without this intercept, so the
+	// background-lifecycle save (SetOnExitedForeground) covers those devices.
 	w.SetCloseIntercept(func() {
+		saveCurrent()
 		gt.stop()
 		w.Close()
 	})
@@ -549,21 +635,4 @@ func showSolveConfirm(w fyne.Window, bw *BoardWidget) {
 		},
 		w,
 	)
-}
-
-// ---- Starter puzzle ----------------------------------------------------
-
-// starterPuzzle returns a well-known easy Sudoku puzzle (0 = empty).
-func starterPuzzle() [sudoku.BoardSize][sudoku.BoardSize]int {
-	return [sudoku.BoardSize][sudoku.BoardSize]int{
-		{5, 3, 0, 0, 7, 0, 0, 0, 0},
-		{6, 0, 0, 1, 9, 5, 0, 0, 0},
-		{0, 9, 8, 0, 0, 0, 0, 6, 0},
-		{8, 0, 0, 0, 6, 0, 0, 0, 3},
-		{4, 0, 0, 8, 0, 3, 0, 0, 1},
-		{7, 0, 0, 0, 2, 0, 0, 0, 6},
-		{0, 6, 0, 0, 0, 0, 2, 8, 0},
-		{0, 0, 0, 4, 1, 9, 0, 0, 5},
-		{0, 0, 0, 0, 8, 0, 0, 7, 9},
-	}
 }
