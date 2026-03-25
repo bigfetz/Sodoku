@@ -117,12 +117,33 @@ Tap **New Game** to choose from five difficulty levels:
 - [Fyne CLI](https://docs.fyne.io/started/cli.html): `go install fyne.io/tools/cmd/fyne@latest`
 
 ### iOS (requires macOS + Apple Developer account)
+
+Before running, edit the config block at the top of `deploy_iphone.sh`:
+
+| Variable | What to set | How to find it |
+|---|---|---|
+| `CERT` | Your Apple Developer signing identity | `security find-identity -v -p codesigning` |
+| `PROFILE` | Path to your `.mobileprovision` file | Download from [developer.apple.com](https://developer.apple.com/account/resources/profiles/) or find in `~/Library/Developer/Xcode/UserData/Provisioning Profiles/` |
+| `DEVICE_UDID` | UDID of your iPhone | `xcrun devicectl list devices` or Xcode → Window → Devices and Simulators |
+| `BUNDLE_ID` | Your app's bundle identifier (must match the profile) | Your choice, e.g. `com.yourname.sudoku` |
+| `TEAM_ID` | Your 10-character Apple Developer Team ID | [developer.apple.com/account](https://developer.apple.com/account) → Membership |
+
 ```sh
 ./deploy_iphone.sh
 ```
 Builds for `arm64`, injects a provisioning profile, re-signs, and installs via `xcrun devicectl`.
 
 ### Android (requires Android SDK + NDK)
+
+Before running, edit the config block at the top of `deploy_android.sh`:
+
+| Variable | What to set | How to find it |
+|---|---|---|
+| `JAVA_HOME` | Path to the JDK bundled with Android Studio | Android Studio → Settings → Build Tools → Gradle → Gradle JDK |
+| `ANDROID_NDK_HOME` | Path to your installed NDK | `ls $ANDROID_HOME/ndk/` — install via SDK Manager → SDK Tools → NDK |
+| `BUILD_TOOLS_VER` | Version of Android build-tools you have installed | `ls $ANDROID_HOME/build-tools/` |
+| `BUNDLE_ID` | Your Android app ID (reverse-domain format) | Your choice, e.g. `com.yourname.sudoku` |
+
 ```sh
 ./deploy_android.sh
 ```

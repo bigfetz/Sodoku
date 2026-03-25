@@ -1,13 +1,32 @@
 #!/bin/zsh
 # deploy_iphone.sh — builds and installs Sudoku on connected iPhone
+#
+# ── CONFIGURE THESE FOR YOUR MACHINE ────────────────────────────────────────
+# CERT:        Your Apple Developer signing identity.
+#              Find it with: security find-identity -v -p codesigning
+CERT="YOUR_SIGNING_IDENTITY"          # e.g. "Apple Development: you@example.com (XXXXXXXXXX)"
+#
+# PROFILE:     Full path to your provisioning profile (.mobileprovision).
+#              Download from https://developer.apple.com/account/resources/profiles/
+#              or find existing ones in:
+#              ~/Library/Developer/Xcode/UserData/Provisioning Profiles/
+PROFILE="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/YOUR_PROFILE_UUID.mobileprovision"
+#
+# DEVICE_UDID: UDID of the iPhone to install on.
+#              Find it with: xcrun devicectl list devices
+#              or in Xcode → Window → Devices and Simulators
+DEVICE_UDID="YOUR_DEVICE_UDID"
+#
+# BUNDLE_ID:   Must match the bundle ID in your provisioning profile.
+BUNDLE_ID="YOUR_BUNDLE_ID"           # e.g. "com.yourname.sudoku"
+#
+# TEAM_ID:     Your 10-character Apple Developer Team ID.
+#              Find it at https://developer.apple.com/account → Membership
+TEAM_ID="YOUR_TEAM_ID"               # e.g. "AB12CD34EF"
+# ────────────────────────────────────────────────────────────────────────────
 set -e
 
 APPDIR="$(dirname "$0")/Sudoku.app"
-CERT="Apple Development: matthewfetz@gmail.com (DRY8YFHJ8B)"
-PROFILE="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/dc490d32-527b-404d-937c-5b34967318cb.mobileprovision"
-DEVICE_UDID="00008150-000E19900E83401C"
-BUNDLE_ID="Fetzco.com-matthewfetzer-sudoku"
-TEAM_ID="8K2BL48KZ2"
 
 echo "==> Building for iOS simulator (generates .app structure)..."
 cd "$(dirname "$0")"
